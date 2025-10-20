@@ -1,137 +1,125 @@
 function [MDP] = spm_MDP_VB_X_tutorial(MDP,OPTIONS)
-% UPDATED: 8/28/2024 (modified forgetting rate implementation)
+% 更新日: 2024/8/28 (忘却率の実装を修正)
 
-% active inference and learning using variational message passing
-% FORMAT [MDP] = spm_MDP_VB_X_tutorial(MDP,OPTIONS)
+% 変分メッセージパッシングを用いた能動的推論と学習
+% 書式 [MDP] = spm_MDP_VB_X_tutorial(MDP,OPTIONS)
 %
-% Input; MDP(m,n)       - structure array of m models over n epochs
+% 入力; MDP(m,n)      - nエポックにわたるm個のモデルの構造体配列
 %
-% MDP.V(T - 1,P,F)      - P allowable policies (T - 1 moves) over F factors
-% or
-% MDP.U(1,P,F)          - P allowable actions at each move
-% MDP.T                 - number of outcomes
+% MDP.V(T - 1,P,F)    - F個の要因にわたるP個の許容可能な方策（T - 1回の移動）
+% または
+% MDP.U(1,P,F)        - 各移動におけるP個の許容可能な行動
+% MDP.T               - 結果の数
 %
-% MDP.A{G}(O,N1,...,NF) - likelihood of O outcomes given hidden states
-% MDP.B{F}(NF,NF,MF)    - transitions among states under MF control states
-% MDP.C{G}(O,T)         - (log) prior preferences for outcomes (modality G)
-% MDP.D{F}(NF,1)        - prior probabilities over initial states
-% MDP.E(P,1)            - prior probabilities over policies
+% MDP.A{G}(O,N1,...,NF) - 隠れ状態が与えられたときのO個の結果の尤度
+% MDP.B{F}(NF,NF,MF)  - MF個の制御状態下での状態間の遷移
+% MDP.C{G}(O,T)       - 結果に対する（対数）事前選好（モダリティG）
+% MDP.D{F}(NF,1)      - 初期状態に対する事前確率
+% MDP.E(P,1)          - 方策に対する事前確率
 %
-% MDP.a{G}              - concentration parameters for A
-% MDP.b{F}              - concentration parameters for B
-% MDP.c{G}              - concentration parameters for C
-% MDP.d{F}              - concentration parameters for D
-% MDP.e                 - concentration parameters for E
+% MDP.a{G}            - Aの集中度パラメーター
+% MDP.b{F}            - Bの集中度パラメーター
+% MDP.c{G}            - Cの集中度パラメーター
+% MDP.d{F}            - Dの集中度パラメーター
+% MDP.e               - Eの集中度パラメーター
 %
-% optional:
-% MDP.s(F,T)            - matrix of true states - for each hidden factor
-% MDP.o(G,T)            - matrix of outcomes    - for each outcome modality
-% or .O{G}(O,T)         - likelihood matrix     - for each outcome modality
-% MDP.u(F,T - 1)        - vector of actions     - for each hidden factor
+% オプション:
+% MDP.s(F,T)          - 真の状態の行列 - 各隠れ要因ごと
+% MDP.o(G,T)          - 結果の行列     - 各結果モダリティごと
+% または .O{G}(O,T)   - 尤度行列     - 各結果モダリティごと
+% MDP.u(F,T - 1)      - 行動のベクトル   - 各隠れ要因ごと
 %
-% MDP.alpha             - precision - action selection [512]
-% MDP.beta              - precision over precision (Gamma hyperprior - [1])
-% MDP.chi               - Occams window for deep updates
-% MDP.tau               - time constant for gradient descent [4]
-% MDP.eta               - learning rate for model parameters
-% MDP.omega             - forgetting rate for model parameters
-% MDP.zeta              - Occam's window for polcies [3]
-% MDP.erp               - resetting of initial states, to simulate ERPs [4]
+% MDP.alpha           - 精度 - 行動選択 [512]
+% MDP.beta            - 精度の精度（ガンマハイパー事前分布 - [1]）
+% MDP.chi             - 深い更新のためのオッカムの窓
+% MDP.tau             - 勾配降下の時定数 [4]
+% MDP.eta             - モデルパラメーターの学習率
+% MDP.omega           - モデルパラメーターの忘却率
+% MDP.zeta            - 方策のためのオッカムの窓 [3]
+% MDP.erp             - ERPをシミュレートするための初期状態のリセット [4]
 %
-% MDP.demi.C            - Mixed model: cell array of true causes (DEM.C)
-% MDP.demi.U            - Bayesian model average (DEM.U) see: spm_MDP_DEM
-% MDP.link              - link array to generate outcomes from
-%                         subordinate MDP; for deep (hierarchical) models
+% MDP.demi.C          - 混合モデル: 真の原因のセル配列 (DEM.C)
+% MDP.demi.U          - ベイズモデル平均 (DEM.U) spm_MDP_DEM を参照
+% MDP.link            - 下位のMDPから結果を生成するためのリンク配列
+%                       深い（階層的）モデル用
 %
-% OPTIONS.plot          - switch to suppress graphics:  (default: [0])
-% OPTIONS.gamma         - switch to suppress precision: (default: [0])
-% OPTIONS.D             - switch to update initial states over epochs
-% OPTIONS.BMR           - Bayesian model reduction for multiple trials
-%                         see: spm_MDP_VB_sleep(MDP,BMR)
-% Outputs:
+% OPTIONS.plot        - グラフィックを抑制するスイッチ: (デフォルト: [0])
+% OPTIONS.gamma       - 精度を抑制するスイッチ: (デフォルト: [0])
+% OPTIONS.D           - エポックをまたいで初期状態を更新するスイッチ
+% OPTIONS.BMR         - 複数試行のためのベイズモデルリダクション
+%                       spm_MDP_VB_sleep(MDP,BMR) を参照
+% 出力:
 %
-% MDP.P(M1,...,MF,T)    - probability of emitting action M1,.. over time
-% MDP.Q{F}(NF,T,P)      - expected hidden states under each policy
-% MDP.X{F}(NF,T)        - and Bayesian model averages over policies
-% MDP.R(P,T)            - response: conditional expectations over policies
+% MDP.P(M1,...,MF,T)  - 時間経過に伴う行動M1,..を出力する確率
+% MDP.Q{F}(NF,T,P)    - 各方策の下での期待隠れ状態
+% MDP.X{F}(NF,T)      - および方策に対するベイズモデル平均
+% MDP.R(P,T)          - 応答: 方策に対する条件付き期待値
 %
-% MDP.un          - simulated neuronal encoding of hidden states
-% MDP.vn          - simulated neuronal prediction error
-% MDP.xn          - simulated neuronal encoding of policies
-% MDP.wn          - simulated neuronal encoding of precision (tonic)
-% MDP.dn          - simulated dopamine responses (phasic)
-% MDP.rt          - simulated reaction times
+% MDP.un              - 隠れ状態のシミュレートされた神経エンコーディング
+% MDP.vn              - シミュレートされた神経予測誤差
+% MDP.xn              - 方策のシミュレートされた神経エンコーディング
+% MDP.wn              - 精度のシミュレートされた神経エンコーディング（持続的）
+% MDP.dn              - シミュレートされたドーパミン応答（位相的）
+% MDP.rt              - シミュレートされた反応時間
 %
-% MDP.F           - (P x T) (negative) free energies over time
-% MDP.G           - (P x T) (negative) expected free energies over time
-% MDP.H           - (1 x T) (negative) total free energy over time
-% MDP.Fa          - (1 x 1) (negative) free energy of parameters (a)
-% MDP.Fb          - ...
+% MDP.F               - (P x T) 時間経過に伴う（負の）自由エネルギー
+% MDP.G               - (P x T) 時間経過に伴う（負の）期待自由エネルギー
+% MDP.H               - (1 x T) 時間経過に伴う（負の）総自由エネルギー
+% MDP.Fa              - (1 x 1) パラメーター(a)の（負の）自由エネルギー
+% MDP.Fb              - ...
 %
-% This routine provides solutions of active inference (minimisation of
-% variational free energy) using a generative model based upon a Markov
-% decision process (or hidden Markov model, in the absence of action). The
-% model and inference scheme is formulated in discrete space and time. This
-% means that the generative model (and process) are  finite state machines
-% or hidden Markov models whose dynamics are given by transition
-% probabilities among states and the likelihood corresponds to a particular
-% outcome conditioned upon hidden states.
+% このルーチンは、マルコフ決定過程（または行動がない場合は隠れマルコフモデル）
+% に基づく生成モデルを用いて、能動的推論（変分自由エネルギーの最小化）の解を提供します。
+% モデルと推論スキームは、離散的な空間と時間で定式化されています。これは、
+% 生成モデル（および過程）が、状態間の遷移確率によってダイナミクスが与えられる
+% 有限状態機械または隠れマルコフモデルであることを意味し、尤度は隠れ状態に
+% 条件付けられた特定の結果に対応します。
 %
-% When supplied with outcomes, in terms of their likelihood (O) in the
-% absence of any policy specification, this scheme will use variational
-% message passing to optimise expectations about latent or hidden states
-% (and likelihood (A) and prior (B) probabilities). In other words, it will
-% invert a hidden Markov model. When  called with policies, it will
-% generate outcomes that are used to infer optimal policies for active
-% inference.
+% 尤度(O)の形で結果が与えられ、方策の指定がない場合、このスキームは
+% 変分メッセージパッシングを使用して、潜在的または隠れた状態に関する期待値
+% （および尤度(A)と事前(B)確率）を最適化します。言い換えれば、
+% 隠れマルコフモデルを反転させます。方策と共に呼び出されると、能動的推論のための
+% 最適な方策を推論するために使用される結果を生成します。
 %
-% This implementation equips agents with the prior beliefs that they will
-% maximise expected free energy: expected free energy is the free energy of
-% future outcomes under the posterior predictive distribution. This can be
-% interpreted in several ways - most intuitively as minimising the KL
-% divergence between predicted and preferred outcomes (specified as prior
-% beliefs) - while simultaneously minimising ambiguity.
+% この実装は、エージェントが期待自由エネルギーを最大化するという事前信念を
+% 備えさせます。期待自由エネルギーは、事後予測分布の下での将来の結果の
+% 自由エネルギーです。これはいくつかの方法で解釈できますが、最も直感的には、
+% 予測された結果と（事前信念として指定された）好ましい結果との間のKLダイバージェンスを
+% 最小化し、同時に曖昧さを最小化することです。
 %
-% This particular scheme is designed for any allowable policies or control
-% sequences specified in MDP.V. Constraints on allowable policies can limit
-% the numerics or combinatorics considerably. Further, the outcome space
-% and hidden states can be defined in terms of factors; corresponding to
-% sensory modalities and (functionally) segregated representations,
-% respectively. This means, for each factor or subset of hidden states
-% there are corresponding control states that determine the transition
-% probabilities.
+% この特定のスキームは、MDP.Vで指定された任意の許容可能な方策または制御シーケンスの
+% ために設計されています。許容可能な方策の制約は、数値計算や組み合わせ論を
+% 大幅に制限することができます。さらに、結果空間と隠れ状態は、
+% 感覚モダリティと（機能的に）分離された表現にそれぞれ対応する要因の観点から
+% 定義することができます。これは、隠れ状態の各要因またはサブセットに対して、
+% 遷移確率を決定する対応する制御状態があることを意味します。
 %
-% This specification simplifies the generative model, allowing a fairly
-% exhaustive model of potential outcomes. In brief, the agent encodes
-% beliefs about hidden states in the past (and in the future) conditioned
-% on each policy. The conditional expectations determine the (path
-% integral) of free energy that then determines the prior over policies.
-% This prior is used to create a predictive distribution over outcomes,
-% which specifies the next action.
+% この仕様は生成モデルを単純化し、潜在的な結果のかなり網羅的なモデルを
+% 可能にします。要するに、エージェントは各方策を条件として、過去（および未来）の
+% 隠れ状態に関する信念をエンコードします。条件付き期待値は、自由エネルギーの
+% （経路積分）を決定し、それが方策の事前分布を決定します。この事前分布は、
+% 次の行動を指定する結果の予測分布を作成するために使用されます。
 %
-% In addition to state estimation and policy selection, the scheme also
-% updates model parameters; including the state transition matrices,
-% mapping to outcomes and the initial state. This is useful for learning
-% the context. Likelihood and prior probabilities can be specified in terms
-% of concentration parameters (of a Dirichlet distribution (a,b,c,..). If
-% the corresponding (A,B,C,..) are supplied, they will be used to generate
-% outcomes; unless called without policies (in hidden Markov model mode).
-% In this case, the (A,B,C,..) are treated as posterior estimates.
+% 状態推定と方策選択に加えて、このスキームは、状態遷移マトリックス、
+% 結果へのマッピング、および初期状態を含むモデルパラメーターも更新します。
+% これは文脈を学習するのに役立ちます。尤度と事前確率は、
+% （ディリクレ分布の）集中度パラメーター(a,b,c,..)の観点から指定できます。
+% 対応する(A,B,C,..)が提供された場合、それらは結果を生成するために使用されます。
+% ただし、（隠れマルコフモデルモードで）方策なしで呼び出された場合を除きます。
+% この場合、(A,B,C,..)は事後推定値として扱われます。
 %
-% If supplied with a structure array, this routine will automatically step
-% through the implicit sequence of epochs (implicit in the number of
-% columns of the array). If the array has multiple rows, each row will be
-% treated as a separate model or agent. This enables agents to communicate
-% through acting upon a common set of hidden factors, or indeed sharing the
-% same outcomes.
+% 構造体配列が提供された場合、このルーチンは配列の列数に暗黙的に含まれる
+% エポックのシーケンスを自動的にステップスルーします。配列に複数の行がある場合、
+% 各行は別々のモデルまたはエージェントとして扱われます。これにより、エージェントは
+% 共通の隠れ要因セットに作用するか、実際に同じ結果を共有することで
+% コミュニケーションをとることができます。
 %
-% See also: spm_MDP, which uses multiple future states and a mean field
-% approximation for control states - but allows for different actions at
-% all times (as in control problems).
+% 参照: spm_MDP。これは、複数の未来状態と制御状態の平均場近似を使用しますが、
+% （制御問題のように）すべての時点で異なる行動を可能にします。
 %
-% See also: spm_MDP_game_KL, which uses a very similar formulation but just
-% maximises the KL divergence between the posterior predictive distribution
-% over hidden states and those specified by preferences or prior beliefs.
+% 参照: spm_MDP_game_KL。これは非常に似た定式化を使用しますが、
+% 隠れ状態に関する事後予測分布と、選好または事前信念によって指定されたものとの間の
+% KLダイバージェンスを最大化するだけです。
 %__________________________________________________________________________
 % Copyright (C) 2005 Wellcome Trust Centre for Neuroimaging
 
@@ -139,37 +127,37 @@ function [MDP] = spm_MDP_VB_X_tutorial(MDP,OPTIONS)
 % $Id: spm_MDP_VB_X.m 7943 2020-09-11 17:50:52Z thomas $
 
 
-% deal with a sequence of trials
+% 一連の試行を処理
 %==========================================================================
 
-% options
+% オプション
 %--------------------------------------------------------------------------
 try, OPTIONS.plot;  catch, OPTIONS.plot  = 0; end
 try, OPTIONS.gamma; catch, OPTIONS.gamma = 0; end
 try, OPTIONS.D;     catch, OPTIONS.D     = 0; end
 
-% check MDP specification
+% MDPの仕様を確認
 %--------------------------------------------------------------------------
  MDP = spm_MDP_check(MDP);
 
-% handle multiple trials, ensuring parameters (and posteriors) are updated
+% 複数の試行を処理し、パラメーター（と事後分布）が更新されることを保証
 %==========================================================================
 if size(MDP,2) > 1
-    
-    % plotting options
+
+    % プロットオプション
     %----------------------------------------------------------------------
     GRAPH        = OPTIONS.plot;
     OPTIONS.plot = 0;
-    
-    for i = 1:size(MDP,2)                  % number of MDPs
-        for m = 1:size(MDP,1)              % number of trials
-            if i > 1                       % if previous inversions
-                
-                % update concentration parameters
+
+    for i = 1:size(MDP,2)               % MDPの数
+        for m = 1:size(MDP,1)           % 試行数
+            if i > 1                    % もし以前の反転があれば
+
+                % 集中度パラメーターを更新
                 %----------------------------------------------------------
                 MDP(m,i)  = spm_MDP_update(MDP(m,i),OUT(m,i - 1));
-                
-                % update initial states (post-diction)
+
+                % 初期状態を更新（事後予測）
                 %----------------------------------------------------------
                 if any(OPTIONS.D)
                     nD = numel(MDP(m,i).D);
@@ -184,22 +172,22 @@ if size(MDP,2) > 1
                 end
             end
         end
-        
-        % solve this trial (for all models synchronously)
+
+        % この試行を解く（すべてのモデルで同期的に）
         %------------------------------------------------------------------
         OUT(:,i) = spm_MDP_VB_X_tutorial(MDP(:,i),OPTIONS);
-        
-        % Bayesian model reduction
+
+        % ベイズモデルリダクション
         %------------------------------------------------------------------
         if isfield(OPTIONS,'BMR')
             for m = 1:size(MDP,1)
                 OUT(m,i) = spm_MDP_VB_sleep(OUT(m,i),OPTIONS.BMR);
             end
         end
-        
+
     end
-    
-    % plot summary statistics - over trials
+
+    % 試行全体の要約統計量をプロット
     %----------------------------------------------------------------------
     MDP = OUT;
     if GRAPH
@@ -214,91 +202,91 @@ if size(MDP,2) > 1
 end
 
 
-% set up and preliminaries
+% セットアップと準備
 %==========================================================================
 
-% defaults
+% デフォルト値
 %--------------------------------------------------------------------------
-try, alpha = MDP(1).alpha; catch, alpha = 512;  end % action precision
-try, beta  = MDP(1).beta;  catch, beta  = 1;    end % policy precision
-try, zeta  = MDP(1).zeta;  catch, zeta  = 3;    end % Occam window policies
-try, eta   = MDP(1).eta;   catch, eta   = 1;    end % learning rate
-try, omega = MDP(1).omega; catch, omega = 1;    end % forgetting rate
-try, tau   = MDP(1).tau;   catch, tau   = 4;    end % update time constant
-try, chi   = MDP(1).chi;   catch, chi   = 1/64; end % Occam window updates
-try, erp   = MDP(1).erp;   catch, erp   = 4;    end % update reset 
+try, alpha = MDP(1).alpha; catch, alpha = 512;  end % 行動精度
+try, beta  = MDP(1).beta;  catch, beta  = 1;     end % 方策精度
+try, zeta  = MDP(1).zeta;  catch, zeta  = 3;     end % オッカムの窓（方策）
+try, eta   = MDP(1).eta;   catch, eta   = 1;     end % 学習率
+try, omega = MDP(1).omega; catch, omega = 1;     end % 忘却率
+try, tau   = MDP(1).tau;   catch, tau   = 4;     end % 更新時定数
+try, chi   = MDP(1).chi;   catch, chi   = 1/64;  end % オッカムの窓（更新）
+try, erp   = MDP(1).erp;   catch, erp   = 4;     end % 更新リセット
 
-% preclude precision updates for moving policies
+% 移動方策の精度更新を排除
 %--------------------------------------------------------------------------
 if isfield(MDP,'U'), OPTIONS.gamma = 1;         end
 
 
-% number of updates T & policies V (hidden Markov model with no policies)
+% 更新回数Tと方策V（方策のない隠れマルコフモデル）
 %--------------------------------------------------------------------------
 [T,V,HMM] = spm_MDP_get_T(MDP);
 
-% initialise model-specific variables
+% モデル固有の変数を初期化
 %==========================================================================
-Ni    = 16;                                % number of VB iterations
+Ni    = 16;                                 % VB反復回数
 for m = 1:size(MDP,1)
-    
-    % ensure policy length is less than the number of updates
+
+    % 方策の長さが更新回数より短いことを確認
     %----------------------------------------------------------------------
     if size(V{m},1) > (T - 1)
         V{m} = V{m}(1:(T - 1),:,:);
     end
-    
-    % numbers of transitions, policies and states
+
+    % 遷移、方策、状態の数
     %----------------------------------------------------------------------
-    Ng(m) = numel(MDP(m).A);               % number of outcome factors
-    Nf(m) = numel(MDP(m).B);               % number of hidden state factors
-    Np(m) = size(V{m},2);                  % number of allowable policies
+    Ng(m) = numel(MDP(m).A);              % 結果要因の数
+    Nf(m) = numel(MDP(m).B);              % 隠れ状態要因の数
+    Np(m) = size(V{m},2);                 % 許容可能な方策の数
     for f = 1:Nf(m)
-        Ns(m,f) = size(MDP(m).B{f},1);     % number of hidden states
-        Nu(m,f) = size(MDP(m).B{f},3);     % number of hidden controls
+        Ns(m,f) = size(MDP(m).B{f},1);    % 隠れ状態の数
+        Nu(m,f) = size(MDP(m).B{f},3);    % 隠れ制御の数
     end
     for g = 1:Ng(m)
-        No(m,g) = size(MDP(m).A{g},1);     % number of outcomes
-    end    
+        No(m,g) = size(MDP(m).A{g},1);    % 結果の数
+    end
 
-    % parameters of generative model and policies
+    % 生成モデルと方策のパラメーター
     %======================================================================
-    
-    % likelihood model (for a partially observed MDP)
+
+    % 尤度モデル（部分観測マルコフ決定過程用）
     %----------------------------------------------------------------------
     for g = 1:Ng(m)
-        
-        % ensure probabilities are normalised  : A
+
+        % 確率が正規化されていることを確認 : A
         %------------------------------------------------------------------
         MDP(m).A{g} = spm_norm(MDP(m).A{g});
-        
-        % parameters (concentration parameters): a
+
+        % パラメーター（集中度パラメーター）: a
         %------------------------------------------------------------------
         if isfield(MDP,'a')
             A{m,g}  = spm_norm(MDP(m).a{g});
         else
             A{m,g}  = spm_norm(MDP(m).A{g});
         end
-        
-        % prior concentration paramters for complexity (and novelty)
+
+        % 複雑さ（と新規性）のための事前集中度パラメーター
         %------------------------------------------------------------------
         if isfield(MDP,'a')
             pA{m,g} = MDP(m).a{g};
             wA{m,g} = spm_wnorm(MDP(m).a{g}).*(pA{m,g} > 0);
         end
-        
+
     end
-    
-    % transition probabilities (priors)
+
+    % 遷移確率（事前分布）
     %----------------------------------------------------------------------
     for f = 1:Nf(m)
         for j = 1:Nu(m,f)
-            
-            % controlable transition probabilities : B
+
+            % 制御可能な遷移確率 : B
             %--------------------------------------------------------------
             MDP(m).B{f}(:,:,j) = spm_norm(MDP(m).B{f}(:,:,j));
-            
-            % parameters (concentration parameters): b
+
+            % パラメーター（集中度パラメーター）: b
             %--------------------------------------------------------------
             if isfield(MDP,'b') && ~HMM
                 sB{m,f}(:,:,j) = spm_norm(MDP(m).b{f}(:,:,j) );
@@ -308,17 +296,17 @@ for m = 1:size(MDP,1)
                 rB{m,f}(:,:,j) = spm_norm(MDP(m).B{f}(:,:,j)');
             end
         end
-        
-        % prior concentration paramters for complexity
+
+        % 複雑さのための事前集中度パラメーター
         %------------------------------------------------------------------
         if isfield(MDP,'b')
             pB{m,f} = MDP(m).b{f};
             wB{m,f} = spm_wnorm(MDP(m).b{f}).*(pB{m,f} > 0);
         end
-        
+
     end
-    
-    % priors over initial hidden states - concentration parameters
+
+    % 初期隠れ状態の事前分布 - 集中度パラメーター
     %----------------------------------------------------------------------
     for f = 1:Nf(m)
         if isfield(MDP,'d')
@@ -329,33 +317,33 @@ for m = 1:size(MDP,1)
             D{m,f} = spm_norm(ones(Ns(m,f),1));
             MDP(m).D{f} = D{m,f};
         end
-        
-        % prior concentration paramters for complexity
+
+        % 複雑さのための事前集中度パラメーター
         %------------------------------------------------------------------
         if isfield(MDP,'d')
             pD{m,f} = MDP(m).d{f};
             wD{m,f} = spm_wnorm(MDP(m).d{f});
         end
     end
-    
-    % priors over policies - concentration parameters
+
+    % 方策の事前分布 - 集中度パラメーター
     %----------------------------------------------------------------------
     if isfield(MDP,'e')
-        E{m} = spm_norm(MDP(m).e); 
+        E{m} = spm_norm(MDP(m).e);
     elseif isfield(MDP,'E')
         E{m} = spm_norm(MDP(m).E);
     else
         E{m} = spm_norm(ones(Np(m),1));
     end
     qE{m}    = spm_log(E{m});
-    
-    % prior concentration paramters for complexity
+
+    % 複雑さのための事前集中度パラメーター
     %----------------------------------------------------------------------
     if isfield(MDP,'e')
         pE{m} = MDP(m).e;
     end
-    
-    % prior preferences (log probabilities) : C
+
+    % 事前選好（対数確率） : C
     %----------------------------------------------------------------------
     for g = 1:Ng(m)
         if isfield(MDP,'c')
@@ -366,8 +354,8 @@ for m = 1:size(MDP,1)
         else
             C{m,g}  = zeros(No(m,g),1);
         end
-        
-        % assume time-invariant preferences, if unspecified
+
+        % 指定がない場合、時間不変の選好を仮定
         %------------------------------------------------------------------
         if size(C{m,g},2) == 1
             C{m,g} = repmat(C{m,g},1,T);
@@ -379,32 +367,32 @@ for m = 1:size(MDP,1)
         C{m,g} = spm_log(spm_softmax(C{m,g}));
 
     end
-    
-    % initialise  posterior expectations of hidden states
+
+    % 隠れ状態の事後期待値を初期化
     %----------------------------------------------------------------------
     for f = 1:Nf(m)
         xn{m,f} = zeros(Ni,Ns(m,f),1,1,Np(m)) + 1/Ns(m,f);
         vn{m,f} = zeros(Ni,Ns(m,f),1,1,Np(m));
-        x{m,f}  = zeros(Ns(m,f),T,Np(m))      + 1/Ns(m,f);
+        x{m,f}  = zeros(Ns(m,f),T,Np(m))     + 1/Ns(m,f);
         X{m,f}  = repmat(D{m,f},1,1);
         for k = 1:Np(m)
             x{m,f}(:,1,k) = D{m,f};
         end
     end
-    
-    % initialise posteriors over polices and action
+
+    % 方策と行動の事後分布を初期化
     %----------------------------------------------------------------------
     P{m}  = zeros([Nu(m,:),1]);
     un{m} = zeros(Np(m),1);
     u{m}  = zeros(Np(m),1);
-    
-    % if there is only one policy
+
+    % もし方策が一つしかない場合
     %----------------------------------------------------------------------
     if Np(m) == 1
         u{m} = ones(Np(m),T);
     end
-    
-    % if states have not been specified set to 0
+
+    % 状態が指定されていない場合は0に設定
     %----------------------------------------------------------------------
     s{m}  = zeros(Nf(m),T);
     try
@@ -412,8 +400,8 @@ for m = 1:size(MDP,1)
         s{m}(i) = MDP(m).s(i);
     end
     MDP(m).s    = s{m};
-    
-    % if outcomes have not been specified set to 0
+
+    % 結果が指定されていない場合は0に設定
     %----------------------------------------------------------------------
     o{m}  = zeros(Ng(m),T);
     try
@@ -421,38 +409,38 @@ for m = 1:size(MDP,1)
         o{m}(i) = MDP(m).o(i);
     end
     MDP(m).o = o{m};
-    
-    % (indices of) plausible (allowable) policies
+
+    % もっともらしい（許容可能な）方策の（インデックス）
     %----------------------------------------------------------------------
     p{m}  = 1:Np(m);
-    
-    % expected rate parameter (precision of posterior over policies)
+
+    % 期待レートパラメーター（方策の事後分布の精度）
     %----------------------------------------------------------------------
-    qb{m} = beta;                          % initialise rate parameters
-    w{m}  = 1/qb{m};                       % posterior precision (policy)
-    
+    qb{m} = beta;                       % レートパラメーターを初期化
+    w{m}  = 1/qb{m};                    % 事後精度（方策）
+
 end
 
-% ensure any outcome generating agent is updated first
+% 結果を生成するエージェントが最初に更新されるようにする
 %--------------------------------------------------------------------------
 [M,MDP] = spm_MDP_get_M(MDP,T,Ng);
 
 
-% belief updating over successive time points
+% 連続する時点にわたる信念更新
 %==========================================================================
 for t = 1:T
-    
-    % generate hidden states and outcomes for each agent or model
+
+    % 各エージェントまたはモデルの隠れ状態と結果を生成
     %======================================================================
     for m = M(t,:)
-        
-        if ~HMM % not required for HMM
-            
-            % sample state, if not specified
+
+        if ~HMM % HMMには不要
+
+            % 状態が指定されていない場合、サンプリングする
             %--------------------------------------------------------------
             for f = 1:Nf(m)
-                
-                % the next state is generated by action on external states
+
+                % 次の状態は外部状態への行動によって生成される
                 %----------------------------------------------------------
                 if MDP(m).s(f,t) == 0
                     if t > 1
@@ -462,100 +450,100 @@ for t = 1:T
                     end
                     MDP(m).s(f,t) = find(rand < cumsum(ps),1);
                 end
-                
+
             end
-            
-            % posterior predictive density over hidden (external) states
+
+            % 隠れ（外部）状態の事後予測密度
             %--------------------------------------------------------------
             for f = 1:Nf(m)
-                
-                % under selected action (xqq)
+
+                % 選択された行動の下で (xqq)
                 %----------------------------------------------------------
                 if t > 1
                     xqq{m,f} = sB{m,f}(:,:,MDP(m).u(f,t - 1))*X{m,f}(:,t - 1);
                 else
                     xqq{m,f} = X{m,f}(:,t);
                 end
-                
-                % Bayesian model average (xq)
+
+                % ベイズモデル平均 (xq)
                 %----------------------------------------------------------
                 xq{m,f} = X{m,f}(:,t);
-                
+
             end
-            
-            % sample outcome, if not specified
+
+            % 結果が指定されていない場合、サンプリングする
             %--------------------------------------------------------------
             for g = 1:Ng(m)
-                
-                % if outcome is not specified
+
+                % 結果が指定されていない場合
                 %----------------------------------------------------------
                 if ~MDP(m).o(g,t)
-                    
-                    % outcome is generated by model n
+
+                    % 結果はモデルnによって生成される
                     %------------------------------------------------------
                     if MDP(m).n(g,t)
 
                         n    = MDP(m).n(g,t);
                         if n == m
-                            
-                            % outcome that minimises free energy (i.e.,
-                            % maximises accuracy)
+
+                            % 自由エネルギーを最小化する（つまり、
+                            % 精度を最大化する）結果
                             %----------------------------------------------
-                            F             = spm_dot(spm_log(A{m,g}),xqq(m,:));
-                            po            = spm_softmax(F*512);
+                            F           = spm_dot(spm_log(A{m,g}),xqq(m,:));
+                            po          = spm_softmax(F*512);
                             MDP(m).o(g,t) = find(rand < cumsum(po),1);
-                            
+
                         else
-                            
-                            % outcome from model n
+
+                            % モデルnからの結果
                             %----------------------------------------------
                             MDP(m).o(g,t) = MDP(n).o(g,t);
-                            
+
                         end
-                        
+
                     else
 
-                        % or sample from likelihood given hidden state
+                        % または隠れ状態が与えられたときの尤度からサンプリング
                         %--------------------------------------------------
-                        ind           = num2cell(MDP(m).s(:,t));
-                        po            = MDP(m).A{g}(:,ind{:});
+                        ind         = num2cell(MDP(m).s(:,t));
+                        po          = MDP(m).A{g}(:,ind{:});
                         MDP(m).o(g,t) = find(rand < cumsum(po),1);
-                        
+
                     end
                 end
             end
-            
+
         end % HMM
-        
-        % get probabilistic outcomes from samples or subordinate level
+
+        % サンプルまたは下位レベルから確率的な結果を取得
         %==================================================================
-        
-        % get outcome likelihood (O{m})
+
+        % 結果の尤度を取得 (O{m})
         %------------------------------------------------------------------
         for g = 1:Ng(m)
-            
-            % specified as a likelihood or observation
+
+            % 尤度または観測として指定
             %--------------------------------------------------------------
             if HMM
-                
-                % specified as a likelihood(HMM)
+
+                % 尤度として指定(HMM)
                 %----------------------------------------------------------
                 O{m}{g,t} = MDP(m).O{g}(:,t);
-                
+
             else
-                
-                % specified as the sampled outcome
+
+                % サンプリングされた結果として指定
                 %----------------------------------------------------------
                 O{m}{g,t} = sparse(MDP(m).o(g,t),1,1,No(m,g),1);
             end
-            
+
         end
-               
-        % or generate outcomes from a subordinate MDP
+
+        % または下位のMDPから結果を生成
         %==================================================================
         if isfield(MDP,'link')
-            
-            % use previous inversions (if available) to reproduce outcomes
+
+            % 以前の反転（利用可能な場合）を使用して結果を再現
             %--------------------------------------------------------------
             try
                 mdp = MDP(m).mdp(t);
@@ -570,24 +558,24 @@ for t = 1:T
                     end
                 end
             end
-            
-            % priors over states (of subordinate level)
+
+            % （下位レベルの）状態の事前分布
             %--------------------------------------------------------------
             mdp.factor = [];
             for f = 1:size(MDP(m).link,1)
                 for g = 1:size(MDP(m).link,2)
                     if ~isempty(MDP(m).link{f,g})
-                        
-                        % subordinate state has hierarchical constraints
+
+                        % 下位の状態には階層的な制約がある
                         %--------------------------------------------------
                         mdp.factor(end + 1) = f;
-                                                
-                        % empirical priors over initial states
+
+                        % 初期状態の経験的事前分布
                         %--------------------------------------------------
                         O{m}{g,t} = spm_dot(A{m,g},xq(m,:));
                         mdp.D{f}  = MDP(m).link{f,g}*O{m}{g,t};
-                        
-                        % outcomes (i.e., states) are generated by model n
+
+                        % 結果（つまり、状態）はモデルnによって生成される
                         %--------------------------------------------------
                         if MDP(m).n(g,t)
                             n    = MDP(m).n(g,t);
@@ -598,8 +586,8 @@ for t = 1:T
                                 mdp.s(f,1) = MDP(n).mdp(t).s(f,1);
                             end
                         end
-                        
-                        % hidden state for lower level is the outcome
+
+                        % 下位レベルの隠れ状態は結果
                         %--------------------------------------------------
                         try
                             mdp.s(f,1) = mdp.s(f,1);
@@ -611,41 +599,41 @@ for t = 1:T
                     end
                 end
             end
-            
-            
-            % empirical prior preferences
+
+
+            % 経験的な事前選好
             %--------------------------------------------------------------
             if isfield(MDP,'linkC')
                 for f = 1:size(MDP(m).linkC,1)
                     for g = 1:size(MDP(m).linkC,2)
                         if ~isempty(MDP(m).linkC{f,g})
-                            O{m}{g,t} = spm_dot(A{m,g},xq(m,:));           
+                            O{m}{g,t} = spm_dot(A{m,g},xq(m,:));
                             mdp.C{f}  = spm_log(MDP(m).linkC{f,g}*O{m}{g,t});
                         end
                     end
                 end
             end
-            
-            % empirical priors over policies
+
+            % 経験的な方策の事前分布
             %--------------------------------------------------------------
             if isfield(MDP,'linkE')
                 mdp.factorE = [];
                 for g = 1:size(MDP(m).linkE,2)
                     if ~isempty(MDP(m).linkE{g})
-                        O{m}{g,t} = spm_dot(A{m,g},xq(m,:));               
+                        O{m}{g,t} = spm_dot(A{m,g},xq(m,:));
                         mdp.E     = MDP(m).linkE{g}*O{m}{g,t};
                     end
                 end
             end
-            
-            
-                        
-            % infer hidden states at lower level (outcomes at this level)
+
+
+
+            % 下位レベルで隠れ状態を推論（このレベルでは結果）
             %==============================================================
             MDP(m).mdp(t) = spm_MDP_VB_X_tutorial(mdp);
-            
 
-            % get inferred outcomes from subordinate MDP
+
+            % 下位のMDPから推論された結果を取得
             %==============================================================
             for f = 1:size(MDP(m).link,1)
                 for g = 1:size(MDP(m).link,2)
@@ -654,8 +642,8 @@ for t = 1:T
                     end
                 end
             end
-            
-            % if hierarchical preferences, these contribute to outcomes ...
+
+            % もし階層的な選好があれば、それらは結果に寄与する...
             %--------------------------------------------------------------
             if isfield(MDP,'linkC')
                 for f = 1:size(MDP(m).linkC,1)
@@ -667,8 +655,8 @@ for t = 1:T
                     end
                 end
             end
-            
-            % ... and the same for policies
+
+            % ...そして方策についても同様
             %--------------------------------------------------------------
             if isfield(MDP,'linkE')
                 for g = 1:size(MDP(m).linkE,2)
@@ -677,62 +665,64 @@ for t = 1:T
                     end
                 end
             end
-            
-            % Ensure DEM starts with final states from previous inversion
+
+            % DEMが前の反転の最終状態で開始することを確認
             %----------------------------------------------------------
             if isfield(MDP(m).MDP,'demi')
                 MDP(m).MDP.DEM.G(1).x = MDP(m).mdp(t).dem(end).pU.x{1}(:,end);
                 MDP(m).MDP.DEM.M(1).x = MDP(m).mdp(t).dem(end).qU.x{1}(:,end);
             end
-            
-        end % end of hierarchical mode (link)
-        
-        
-        % or generate outcome likelihoods from a variational filter
+
+        end % 階層モード（link）の終わり
+
+
+
+        % または変分フィルターから結果の尤度を生成
         %==================================================================
         if isfield(MDP,'demi')
-            
-            % use previous inversions (if available)
+
+            % 以前の反転（利用可能な場合）を使用
             %--------------------------------------------------------------
             try
                 MDP(m).dem(t) = spm_ADEM_update(MDP(m).dem(t - 1));
             catch
                 MDP(m).dem(t) = MDP(m).DEM;
             end
-            
-            % get prior over outcomes
+
+            % 結果の事前分布を取得
             %--------------------------------------------------------------
             for g = 1:Ng(m)
                 O{m}{g,t} = spm_dot(A{m,g},xqq(m,:));
             end
-            
-            % get posterior outcome from Bayesian filtering
+
+            % ベイズフィルタリングから事後結果を取得
             %--------------------------------------------------------------
             MDP(m).dem(t) = spm_MDP_DEM(MDP(m).dem(t),...
                 MDP(m).demi,O{m}(:,t),MDP(m).o(:,t));
-            
+
             for g = 1:Ng(m)
                 O{m}{g,t} = MDP(m).dem(t).X{g}(:,end);
             end
-            
-        end % end outcomes from Bayesian filter
-        
-        
-        % or generate outcome likelihoods from voice recognition
+
+        end % ベイズフィルターからの結果の終わり
+
+
+
+        % または音声認識から結果の尤度を生成
         %==================================================================
         if isfield(MDP,'VOX')
-            
-            % get predictive prior over outcomes if MDP.VOX = 2
+
+            % MDP.VOX = 2 の場合、結果の予測事前分布を取得
             %--------------------------------------------------------------
             if MDP(m).VOX == 2
-                
-                % current outcome
+
+                % 現在の結果
                 %----------------------------------------------------------
                 for g = 1:Ng(m)
                     O{m}{g,t} = spm_dot(A{m,g},xqq(m,:));
                 end
-                
-                % and next outcome if available
+
+                % そして、利用可能であれば次の結果
                 %----------------------------------------------------------
                 try
                     for f = 1:Nf(m)
@@ -742,102 +732,102 @@ for t = 1:T
                         O{m}{g,t + 1} = spm_dot(A{m,g},pq);
                     end
                 end
-            
+
             end
-            
-            % get likelihood over outcomes - or articulate phrase
+
+            % 結果の尤度を取得 - またはフレーズを発話
             %--------------------------------------------------------------
             O{m}  = spm_MDP_VB_VOX(MDP(m),O{m},t);
-            
-            % update outcomes
+
+            % 結果を更新
             %--------------------------------------------------------------
             for g = 1:Ng(m)
-                po            = spm_softmax(O{m}{g,t}*512);
+                po          = spm_softmax(O{m}{g,t}*512);
                 MDP(m).o(g,t) = find(rand < cumsum(po),1);
             end
-            
-        end % end outcomes from voice recognition
-        
-        
-        
-        
-        % Likelihood of hidden states
+
+        end % 音声認識からの結果の終わり
+
+
+
+
+        % 隠れ状態の尤度
         %==================================================================
         L{m,t} = 1;
         for g = 1:Ng(m)
             L{m,t} = L{m,t}.*spm_dot(A{m,g},O{m}{g,t});
         end
-        
-        
-        % Variational updates (skip to t = T in HMM mode)
+
+
+        % 変分更新（HMMモードではt = Tにスキップ）
         %==================================================================
         if ~HMM || T == t
-            
-            % eliminate unlikely policies
+
+            % ありそうもない方策を排除
             %--------------------------------------------------------------
             if ~isfield(MDP,'U') && t > 1
                 F    = log(u{m}(p{m},t - 1));
                 p{m} = p{m}((F - max(F)) > -zeta);
             end
-            
-            % processing time and reset
+
+            % 処理時間とリセット
             %--------------------------------------------------------------
             tstart = tic;
             for f = 1:Nf(m)
                 x{m,f} = spm_softmax(spm_log(x{m,f})/erp);
             end
-            
-            % Variational updates (hidden states) under sequential policies
+
+            % 逐次的な方策の下での変分更新（隠れ状態）
             %==============================================================
-            
-            
-            % variational message passing (VMP)
+
+
+            % 変分メッセージパッシング（VMP）
             %--------------------------------------------------------------
-            S     = size(V{m},1) + 1;   % horizon
+            S     = size(V{m},1) + 1;  % ホライズン
             if isfield(MDP,'U')
                 R = t;
             else
                 R = S;
             end
             F     = zeros(Np(m),1);
-            for k = p{m}                % loop over plausible policies
-                dF    = 1;              % reset criterion for this policy
-                for i = 1:Ni            % iterate belief updates
-                    F(k)  = 0;          % reset free energy for this policy
-                    for j = 1:S         % loop over future time points
-                        
-                        % curent posterior over outcome factors
+            for k = p{m}             % もっともらしい方策でループ
+                dF    = 1;           % この方策のリセット基準
+                for i = 1:Ni         % 信念更新を反復
+                    F(k)  = 0;       % この方策の自由エネルギーをリセット
+                    for j = 1:S      % 未来の時点でループ
+
+                        % 現在の結果要因の事後分布
                         %--------------------------------------------------
                         if j <= t
                             for f = 1:Nf(m)
                                 xq{m,f} = full(x{m,f}(:,j,k));
                             end
                         end
-                        
+
                         for f = 1:Nf(m)
-                            
-                            % hidden states for this time and policy
+
+                            % この時間と方策の隠れ状態
                             %----------------------------------------------
                             sx = full(x{m,f}(:,j,k));
                             qL = zeros(Ns(m,f),1);
                             v  = zeros(Ns(m,f),1);
-                            
-                            % evaluate free energy and gradients (v = dFdx)
+
+                            % 自由エネルギーと勾配を評価 (v = dFdx)
                             %----------------------------------------------
                             if dF > exp(-8) || i > 4
-                                
-                                % marginal likelihood over outcome factors
+
+                                % 結果要因の周辺尤度
                                 %------------------------------------------
                                 if j <= t
                                     qL = spm_dot(L{m,j},xq(m,:),f);
                                     qL = spm_log(qL(:));
                                 end
-                                
-                                % entropy
+
+                                % エントロピー
                                 %------------------------------------------
                                 qx  = spm_log(sx);
-                                
-                                % emprical priors (forward messages)
+
+                                % 経験的事前分布（前方メッセージ）
                                 %------------------------------------------
                                 if j < 2
                                     px = spm_log(D{m,f});
@@ -846,90 +836,90 @@ for t = 1:T
                                     px = spm_log(sB{m,f}(:,:,V{m}(j - 1,k,f))*x{m,f}(:,j - 1,k));
                                     v  = v + px + qL - qx;
                                 end
-                                
-                                % emprical priors (backward messages)
+
+                                % 経験的事前分布（後方メッセージ）
                                 %------------------------------------------
                                 if j < R
-                                    px = spm_log(rB{m,f}(:,:,V{m}(j    ,k,f))*x{m,f}(:,j + 1,k));
+                                    px = spm_log(rB{m,f}(:,:,V{m}(j   ,k,f))*x{m,f}(:,j + 1,k));
                                     v  = v + px + qL - qx;
                                 end
-                                
-                                % (negative) free energy
+
+                                % （負の）自由エネルギー
                                 %------------------------------------------
                                 if j == 1 || j == S
                                     F(k) = F(k) + sx'*0.5*v;
                                 else
                                     F(k) = F(k) + sx'*(0.5*v - (Nf(m)-1)*qL/Nf(m));
                                 end
-                                
-                                % update
+
+                                % 更新
                                 %------------------------------------------
-                                v    = v - mean(v);
-                                sx   = spm_softmax(qx + v/tau);
-                                
+                                v     = v - mean(v);
+                                sx    = spm_softmax(qx + v/tau);
+
                             else
                                 F(k) = G(k);
                             end
-                            
-                            % store update neuronal activity
+
+                            % 更新された神経活動を保存
                             %----------------------------------------------
-                            x{m,f}(:,j,k)      = sx;
-                            xq{m,f}            = sx;
+                            x{m,f}(:,j,k)     = sx;
+                            xq{m,f}           = sx;
                             xn{m,f}(i,:,j,t,k) = sx;
                             vn{m,f}(i,:,j,t,k) = v;
-                            
+
                         end
                     end
-                    
-                    % convergence
+
+                    % 収束
                     %------------------------------------------------------
                     if i > 1
                         dF = F(k) - G(k);
                     end
                     G = F;
-                    
+
                 end
             end
-            
-            % accumulate expected free energy of policies (Q)
+
+            % 方策の期待自由エネルギーを蓄積 (Q)
             %==============================================================
-            pu  = 1;                               % empirical prior
-            qu  = 1;                               % posterior
-            Q   = zeros(Np(m),1);                  % expected free energy
+            pu  = 1;                        % 経験的事前分布
+            qu  = 1;                        % 事後分布
+            Q   = zeros(Np(m),1);           % 期待自由エネルギー
             if Np(m) > 1
                 for k = p{m}
-                    
-                    % Bayesian surprise about inital conditions
+
+                    % 初期条件に関するベイズサプライズ
                     %------------------------------------------------------
                     if isfield(MDP,'d')
                         for f = 1:Nf(m)
                             Q(k) = Q(k) - spm_dot(wD{m,f},x{m,f}(:,1,k));
                         end
                     end
-                    
+
                     for j = t:S
-                        
-                        % get expected states for this policy and time
+
+                        % この方策と時間の期待状態を取得
                         %--------------------------------------------------
                         for f = 1:Nf(m)
                             xq{m,f} = x{m,f}(:,j,k);
                         end
-                        
-                        % (negative) expected free energy
+
+                        % （負の）期待自由エネルギー
                         %==================================================
-                        
-                        % Bayesian surprise about states
+
+                        % 状態に関するベイズサプライズ
                         %--------------------------------------------------
                         Q(k) = Q(k) + spm_MDP_G(A(m,:),xq(m,:));
-                        
+
                         for g = 1:Ng(m)
-                            
-                            % prior preferences about outcomes
+
+                            % 結果に関する事前選好
                             %----------------------------------------------
                             qo   = spm_dot(A{m,g},xq(m,:));
                             Q(k) = Q(k) + qo'*(C{m,g}(:,j));
-                            
-                            % Bayesian surprise about parameters
+
+                            % パラメーターに関するベイズサプライズ
                             %----------------------------------------------
                             if isfield(MDP,'a')
                                 Q(k) = Q(k) - spm_dot(wA{m,g},{qo xq{m,:}});
@@ -944,80 +934,80 @@ for t = 1:T
                         end
                     end
                 end
-                
-                
-                % variational updates - policies and precision
+
+
+                % 変分更新 - 方策と精度
                 %==========================================================
-                
-                % previous expected precision
+
+                % 以前の期待精度
                 %----------------------------------------------------------
                 if t > 1
                     w{m}(t) = w{m}(t - 1);
                 end
                 for i = 1:Ni
-                    
-                    % posterior and prior beliefs about policies
+
+                    % 方策に関する事後および事前信念
                     %------------------------------------------------------
                     qu = spm_softmax(qE{m}(p{m}) + w{m}(t)*Q(p{m}) + F(p{m}));
                     pu = spm_softmax(qE{m}(p{m}) + w{m}(t)*Q(p{m}));
-                    
-                    % precision (w) with free energy gradients (v = -dF/dw)
+
+                    % 精度 (w) と自由エネルギー勾配 (v = -dF/dw)
                     %------------------------------------------------------
                     if OPTIONS.gamma
                         w{m}(t) = 1/beta;
                     else
-                        eg      = (qu - pu)'*Q(p{m});
-                        dFdg    = qb{m} - beta + eg;
-                        qb{m}   = qb{m} - dFdg/2;
+                        eg     = (qu - pu)'*Q(p{m});
+                        dFdg   = qb{m} - beta + eg;
+                        qb{m}  = qb{m} - dFdg/2;
                         w{m}(t) = 1/qb{m};
                     end
-                    
-                    % simulated dopamine responses (expected precision)
+
+                    % シミュレートされたドーパミン応答（期待精度）
                     %------------------------------------------------------
-                    n             = (t - 1)*Ni + i;
-                    wn{m}(n,1)    = w{m}(t);
+                    n           = (t - 1)*Ni + i;
+                    wn{m}(n,1)  = w{m}(t);
                     un{m}(p{m},n) = qu;
                     u{m}(p{m},t)  = qu;
-                    
-                end               
-            end % end of loop over multiple policies
-            
-            
-            % Bayesian model averaging of hidden states (over policies)
+
+                end
+            end % 複数方策のループの終わり
+
+
+            % 隠れ状態のベイズモデル平均（方策全体）
             %--------------------------------------------------------------
             for f = 1:Nf(m)
                 for i = 1:S
                     X{m,f}(:,i) = reshape(x{m,f}(:,i,:),Ns(m,f),Np(m))*u{m}(:,t);
                 end
             end
-            
-            % processing (i.e., reaction) time
+
+            % 処理（つまり、反応）時間
             %--------------------------------------------------------------
             rt{m}(t)      = toc(tstart);
-            
-            % record (negative) free energies
+
+            % （負の）自由エネルギーを記録
             %--------------------------------------------------------------
             MDP(m).F(:,t) = F;
             MDP(m).G(:,t) = Q;
             MDP(m).H(1,t) = qu'*MDP(m).F(p{m},t) - qu'*(spm_log(qu) - spm_log(pu));
-            
-            % check for residual uncertainty (in hierarchical schemes)
+
+            % 残留不確実性をチェック（階層スキームにおいて）
             %--------------------------------------------------------------
             if isfield(MDP,'factor')
-                
+
                 for f = MDP(m).factor(:)'
                     qx     = X{m,f}(:,1);
                     H(m,f) = qx'*spm_log(qx);
                 end
-                
-                % break if there is no further uncertainty to resolve
+
+                % 解決すべき不確実性がそれ以上ない場合に中断
                 %----------------------------------------------------------
                 if sum(H(:)) > - chi && ~isfield(MDP,'VOX')
                     T = t;
                 end
             end
-            
-            % check for end of sentence (' ') if in VOX mode
+
+            % VOXモードの場合、文の終わり（' '）をチェック
             %--------------------------------------------------------------
             XVOX = 0;
             if isfield(MDP,'VOX') && t > 1
@@ -1030,26 +1020,26 @@ for t = 1:T
                     XVOX = 1;
                 end
             end
-            
-            % action selection
+
+            % 行動選択
             %==============================================================
             if t < T
-                
-                % marginal posterior over action (for each factor)
+
+                % 行動の周辺事後分布（各要因ごと）
                 %----------------------------------------------------------
                 Pu    = zeros([Nu(m,:),1]);
                 for i = 1:Np(m)
-                    sub        = num2cell(V{m}(t,i,:));
+                    sub       = num2cell(V{m}(t,i,:));
                     Pu(sub{:}) = Pu(sub{:}) + u{m}(i,t);
                 end
-                
-                % action selection (softmax function of action potential)
+
+                % 行動選択（行動ポテンシャルのソフトマックス関数）
                 %----------------------------------------------------------
-                sub            = repmat({':'},1,Nf(m));
-                Pu(:)          = spm_softmax(alpha*log(Pu(:)));
+                sub          = repmat({':'},1,Nf(m));
+                Pu(:)        = spm_softmax(alpha*log(Pu(:)));
                 P{m}(sub{:},t) = Pu;
-                
-                % next action - sampled from marginal posterior
+
+                % 次の行動 - 周辺事後分布からサンプリング
                 %----------------------------------------------------------
                 try
                     MDP(m).u(:,t) = MDP(m).u(:,t);
@@ -1057,11 +1047,11 @@ for t = 1:T
                     ind           = find(rand < cumsum(Pu(:)),1);
                     MDP(m).u(:,t) = spm_ind2sub(Nu(m,:),ind);
                 end
-                
-                % update policy and states for moving policies
+
+                % 移動方策の方策と状態を更新
                 %----------------------------------------------------------
                 if isfield(MDP,'U')
-                    
+
                     for f = 1:Nf(m)
                         V{m}(t,:,f) = MDP(m).u(f,t);
                     end
@@ -1070,8 +1060,8 @@ for t = 1:T
                             V{m}(t + 1,:,:) = MDP(m).U(:,:);
                         end
                     end
-                    
-                    % and re-initialise expectations about hidden states
+
+                    % そして隠れ状態の期待値を再初期化
                     %------------------------------------------------------
                     for f = 1:Nf(m)
                         for k = 1:Np(m)
@@ -1079,43 +1069,43 @@ for t = 1:T
                         end
                     end
                 end
-                
-            end % end of state and action selection
-        end % end of variational updates over time
-    end % end of loop over models (agents)
-    
-    
-    % Evaluate reporting function specified
+
+            end % 状態と行動選択の終わり
+        end % 時間にわたる変分更新の終わり
+    end % モデル（エージェント）のループの終わり
+
+
+    % 指定された報告関数を評価
     %======================================================================
     if isfield(MDP,'FCN')
         try
             MDP.FCN(MDP,X);
         end
     end
-    
-    % terminate evidence accumulation
+
+    % 証拠蓄積を終了
     %----------------------------------------------------------------------
     if t == T
         if T == 1
             MDP(m).u  = zeros(Nf(m),0);
         end
         if ~HMM
-            MDP(m).o  = MDP(m).o(:,1:T);        % outcomes at 1,...,T
-            MDP(m).s  = MDP(m).s(:,1:T);        % states   at 1,...,T
-            MDP(m).u  = MDP(m).u(:,1:T - 1);    % actions  at 1,...,T - 1
+            MDP(m).o  = MDP(m).o(:,1:T);       % 1,...,T の結果
+            MDP(m).s  = MDP(m).s(:,1:T);       % 1,...,T の状態
+            MDP(m).u  = MDP(m).u(:,1:T - 1);   % 1,...,T - 1 の行動
         end
         break;
     end
-    
-end % end of loop over time
 
-% learning - accumulate concentration parameters
+end % 時間のループの終わり
+
+% 学習 - 集中度パラメーターを蓄積
 %==========================================================================
 for m = 1:size(MDP,1)
-    
+
     for t = 1:T
-        
-        % mapping from hidden states to outcomes: a
+
+        % 隠れ状態から結果へのマッピング: a
         %------------------------------------------------------------------
         if isfield(MDP,'a')
             for g = 1:Ng(m)
@@ -1127,21 +1117,21 @@ for m = 1:size(MDP,1)
                 MDP(m).a{g} = (MDP(m).a{g}-MDP(m).a_0{g})*(1-omega) + MDP(m).a_0{g} + da*eta;
             end
         end
-        
-        % mapping from hidden states to hidden states: b(u)
+
+        % 隠れ状態から隠れ状態へのマッピング: b(u)
         %------------------------------------------------------------------
         if isfield(MDP,'b') && t > 1
             for f = 1:Nf(m)
                 for k = 1:Np(m)
-                    v   = V{m}(t - 1,k,f);
+                    v  = V{m}(t - 1,k,f);
                     db  = u{m}(k,t)*x{m,f}(:,t,k)*x{m,f}(:,t - 1,k)';
                     db  = db.*(MDP(m).b{f}(:,:,v) > 0);
                     MDP(m).b{f}(:,:,v) = (MDP(m).b{f}(:,:,v)-MDP(m).b_0{f}(:,:,v))*(1-omega) + MDP(m).b_0{f}(:,:,v) + db*eta;
                 end
             end
         end
-        
-        % accumulation of prior preferences: (c)
+
+        % 事前選好の蓄積: (c)
         %------------------------------------------------------------------
         if isfield(MDP,'c')
             for g = 1:Ng(m)
@@ -1156,8 +1146,8 @@ for m = 1:size(MDP,1)
             end
         end
     end
-    
-    % initial hidden states:
+
+    % 初期隠れ状態:
     %----------------------------------------------------------------------
     if isfield(MDP,'d')
         for f = 1:Nf(m)
@@ -1165,14 +1155,14 @@ for m = 1:size(MDP,1)
             MDP(m).d{f}(i) = (MDP(m).d{f}(i)-MDP(m).d_0{f}(i))*(1-omega) + MDP(m).d_0{f}(i) + X{m,f}(i,1)*eta;
         end
     end
-    
-    % policies
+
+    % 方策
     %----------------------------------------------------------------------
     if isfield(MDP,'e')
         MDP(m).e = (MDP(m).e-MDP(m).e_0)*(1-omega) + MDP(m).e_0 + eta*u{m}(:,T);
     end
-    
-    % (negative) free energy of parameters (complexity): outcome specific
+
+    % パラメーターの（負の）自由エネルギー（複雑さ）: 結果固有
     %----------------------------------------------------------------------
     for g = 1:Ng(m)
         if isfield(MDP,'a')
@@ -1182,8 +1172,8 @@ for m = 1:size(MDP,1)
             MDP(m).Fc(f) = - spm_KL_dir(MDP(m).c{g},pC{g});
         end
     end
-    
-    % (negative) free energy of parameters: state specific
+
+    % パラメーターの（負の）自由エネルギー: 状態固有
     %----------------------------------------------------------------------
     for f = 1:Nf(m)
         if isfield(MDP,'b')
@@ -1193,14 +1183,14 @@ for m = 1:size(MDP,1)
             MDP(m).Fd(f) = - spm_KL_dir(MDP(m).d{f},pD{m,f});
         end
     end
-    
-    % (negative) free energy of parameters: policy specific
+
+    % パラメーターの（負の）自由エネルギー: 方策固有
     %----------------------------------------------------------------------
     if isfield(MDP,'e')
         MDP(m).Fe = - spm_KL_dir(MDP(m).e,pE{m});
     end
-    
-    % simulated dopamine (or cholinergic) responses
+
+    % シミュレートされたドーパミン（またはコリン作動性）応答
     %----------------------------------------------------------------------
     if Np(m) > 1
         dn{m} = 8*gradient(wn{m}) + wn{m}/8;
@@ -1208,8 +1198,8 @@ for m = 1:size(MDP,1)
         dn{m} = [];
         wn{m} = [];
     end
-    
-    % Bayesian model averaging of expected hidden states over policies
+
+    % 方策に対する期待隠れ状態のベイズモデル平均
     %----------------------------------------------------------------------
     for f = 1:Nf(m)
         if ~XVOX
@@ -1223,43 +1213,43 @@ for m = 1:size(MDP,1)
             end
         end
     end
-    
-    % use penultimate beliefs about moving policies
+
+    % 移動方策に対する最後から2番目の信念を使用
     %----------------------------------------------------------------------
     if isfield(MDP,'U')
         u{m}(:,T)  = [];
         try un{m}(:,(end - Ni + 1):end) = []; catch, end
     end
-    
-    % assemble results and place in NDP structure
+
+    % 結果を組み立て、NDP構造体に配置
     %----------------------------------------------------------------------
-    MDP(m).T  = T;            % number of belief updates
-    MDP(m).O  = O{m};         % outcomes
-    MDP(m).P  = P{m};         % probability of action at time 1,...,T - 1
-    MDP(m).R  = u{m};         % conditional expectations over policies
-    MDP(m).Q  = x(m,:);       % conditional expectations over N states
-    MDP(m).X  = X(m,:);       % Bayesian model averages over T outcomes
-    MDP(m).C  = C(m,:);       % utility
-    
+    MDP(m).T  = T;          % 信念更新の数
+    MDP(m).O  = O{m};       % 結果
+    MDP(m).P  = P{m};       % 時刻1,...,T - 1での行動の確率
+    MDP(m).R  = u{m};       % 方策に対する条件付き期待値
+    MDP(m).Q  = x(m,:);     % N個の状態に対する条件付き期待値
+    MDP(m).X  = X(m,:);     % T個の結果に対するベイズモデル平均
+    MDP(m).C  = C(m,:);     % 効用
+
     if HMM
-        MDP(m).o  = zeros(Ng(m),0);      % outcomes at 1,...,T
-        MDP(m).s  = zeros(Nf(m),0);      % states   at 1,...,T
-        MDP(m).u  = zeros(Nf(m),0);      % actions  at 1,...,T - 1
+        MDP(m).o  = zeros(Ng(m),0);      % 1,...,T の結果
+        MDP(m).s  = zeros(Nf(m),0);      % 1,...,T の状態
+        MDP(m).u  = zeros(Nf(m),0);      % 1,...,T - 1 の行動
         return
     end
-    
-    MDP(m).w  = w{m};         % posterior expectations of precision (policy)
-    MDP(m).vn = Vn(m,:);      % simulated neuronal prediction error
-    MDP(m).xn = Xn(m,:);      % simulated neuronal encoding of hidden states
-    MDP(m).un = un{m};        % simulated neuronal encoding of policies
-    MDP(m).wn = wn{m};        % simulated neuronal encoding of precision
-    MDP(m).dn = dn{m};        % simulated dopamine responses (deconvolved)
-    MDP(m).rt = rt{m};        % simulated reaction time (seconds)
-    
+
+    MDP(m).w  = w{m};       % 精度の事後期待値（方策）
+    MDP(m).vn = Vn(m,:);    % シミュレートされた神経予測誤差
+    MDP(m).xn = Xn(m,:);    % 隠れ状態のシミュレートされた神経エンコーディング
+    MDP(m).un = un{m};      % 方策のシミュレートされた神経エンコーディング
+    MDP(m).wn = wn{m};      % 精度のシミュレートされた神経エンコーディング
+    MDP(m).dn = dn{m};      % シミュレートされたドーパミン応答（デコンボリューション済み）
+    MDP(m).rt = rt{m};      % シミュレートされた反応時間（秒）
+
 end
 
 
-% plot
+% プロット
 %==========================================================================
 if OPTIONS.plot
     if ishandle(OPTIONS.plot)
@@ -1271,28 +1261,28 @@ if OPTIONS.plot
 end
 
 
-% auxillary functions
+% 補助関数
 %==========================================================================
 
 function A  = spm_log(A)
-% log of numeric array plus a small constant
+% 数値配列の対数に小さな定数を加える
 %--------------------------------------------------------------------------
 A  = log(A + 1e-16);
 
 function A  = spm_norm(A)
-% normalisation of a probability transition matrix (columns)
+% 確率遷移マトリックスの正規化（列ごと）
 %--------------------------------------------------------------------------
 A           = bsxfun(@rdivide,A,sum(A,1));
 A(isnan(A)) = 1/size(A,1);
 
 function A  = spm_wnorm(A)
-% summation of a probability transition matrix (columns)
+% 確率遷移マトリックスの合計（列ごと）
 %--------------------------------------------------------------------------
 A   = A + 1e-16;
 A   = bsxfun(@minus,1./sum(A,1),1./A)/2;
 
 function sub = spm_ind2sub(siz,ndx)
-% subscripts from linear index
+% 線形インデックスから添字へ
 %--------------------------------------------------------------------------
 n = numel(siz);
 k = [1 cumprod(siz(1:end-1))];
@@ -1307,22 +1297,21 @@ return
 
 
 function [T,V,HMM] = spm_MDP_get_T(MDP)
-% FORMAT [T,V,HMM] = spm_MDP_get_T(MDP)
-% returns number of policies, policy cell array and HMM flag
-% MDP(m) - structure array of m MPDs
-% T      - number of trials or updates
-% V(m)   - indices of policies for m-th MDP
-% HMM    - flag indicating a hidden Markov model
+% 書式 [T,V,HMM] = spm_MDP_get_T(MDP)
+% 方策の数、方策セル配列、HMMフラグを返す
+% MDP(m) - m個のMPDの構造体配列
+% T      - 試行または更新の数
+% V(m)   - m番目のMDPの方策のインデックス
+% HMM    - 隠れマルコフモデルを示すフラグ
 %
-% This subroutine returns the policy matrix as a cell array (for each
-% model) and the maximum number of updates. If outcomes are specified
-% probabilistically in the field MDP(m).O, and there is only one policy,
-% the partially observed MDP reduces to a hidden Markov model.
+% このサブルーチンは、方策マトリックスをセル配列（各モデルごと）として返し、
+% 最大更新回数を返します。結果がMDP(m).Oフィールドで確率的に指定され、
+% 方策が1つしかない場合、部分観測MDPは隠れマルコフモデルに帰着します。
 %__________________________________________________________________________
 
 for m = 1:size(MDP,1)
-    
-    % check for policies: hidden Markov model, with a single policy
+
+    % 方策をチェック: 隠れマルコフモデル、単一の方策を持つ
     %----------------------------------------------------------------------
     if isfield(MDP(m),'U')
         HMM = size(MDP(m).U,1) < 2;
@@ -1331,38 +1320,38 @@ for m = 1:size(MDP,1)
     else
         HMM = 1;
     end
-    
+
     if isfield(MDP(m),'O') && ~any(MDP(m).o(:)) && HMM
-        
-        % probabilistic outcomes - assume hidden Markov model (HMM)
+
+        % 確率的な結果 - 隠れマルコフモデル（HMM）を仮定
         %------------------------------------------------------------------
-        T(m) = size(MDP(m).O{1},2);         % HMM mode
-        V{m} = ones(T - 1,1);               % single 'policy'
+        T(m) = size(MDP(m).O{1},2);      % HMMモード
+        V{m} = ones(T - 1,1);           % 単一の「方策」
         HMM  = 1;
-        
+
     elseif isfield(MDP(m),'U')
-        
-        % called with repeatable actions (U,T)
+
+        % 繰り返し可能な行動で呼び出される (U,T)
         %------------------------------------------------------------------
-        T(m) = MDP(m).T;                    % number of updates
-        V{m}(1,:,:) = MDP(m).U;             % allowable actions (1,Np,Nf)
+        T(m) = MDP(m).T;                % 更新回数
+        V{m}(1,:,:) = MDP(m).U;         % 許容可能な行動 (1,Np,Nf)
         HMM  = 0;
-        
+
     elseif isfield(MDP(m),'V')
-        
-        % full sequential policies (V)
+
+        % 完全な逐次方策 (V)
         %------------------------------------------------------------------
-        V{m} = MDP(m).V;                    % allowable policies (T - 1,Np,Nf)
-        T(m) = size(MDP(m).V,1) + 1;        % number of transitions
+        V{m} = MDP(m).V;                % 許容可能な方策 (T - 1,Np,Nf)
+        T(m) = size(MDP(m).V,1) + 1;    % 遷移の数
         HMM  = 0;
-        
+
     else
         sprintf('Please specify MDP(%d).U, MDP(%d).V or MDP(%d).O',m), return
     end
-    
+
 end
 
-% number of time steps
+% タイムステップ数
 %--------------------------------------------------------------------------
 T = max(T);
 
@@ -1370,23 +1359,22 @@ return
 
 
 function [M,MDP] = spm_MDP_get_M(MDP,T,Ng)
-% FORMAT [M,MDP] = spm_MDP_get_M(MDP,T,Ng)
-% returns an update matrix for multiple models
-% MDP(m) - structure array of m MPDs
-% T      - number of trials or updates
-% Ng(m)  - number of output modalities for m-th MDP
+% 書式 [M,MDP] = spm_MDP_get_M(MDP,T,Ng)
+% 複数モデル用の更新マトリックスを返す
+% MDP(m) - m個のMPDの構造体配列
+% T      - 試行または更新の数
+% Ng(m)  - m番目のMDPの出力モダリティ数
 %
-% M      - update matrix for multiple models
-% MDP(m) - structure array of m MPDs
+% M      - 複数モデル用の更新マトリックス
+% MDP(m) - m個のMPDの構造体配列
 %
-% In some applications, the outcomes are generated by a particular model
-% (to maximise free energy, based upon the posterior predictive density).
-% The generating model is specified in the matrix MDP(m).n, with a row for
-% each outcome modality, such that each row lists the index of the model
-% responsible for generating outcomes.
+% 一部のアプリケーションでは、結果は特定のモデルによって生成されます
+% （事後予測密度に基づいて自由エネルギーを最大化するため）。
+% 生成モデルはMDP(m).nマトリックスで指定され、各出力モダリティに行があり、
+% 各行には結果の生成を担当するモデルのインデックスがリストされます。
 %__________________________________________________________________________
 
-% check for VOX and ensure the agent generates outcomes when speaking
+% VOXをチェックし、エージェントが話すときに結果を生成することを確認
 %--------------------------------------------------------------------------
 if numel(MDP) == 1
     if isfield(MDP,'MDP')
@@ -1395,10 +1383,10 @@ if numel(MDP) == 1
         end
     end
 end
-    
+
 for m = 1:size(MDP,1)
-    
-    % check size of outcome generating agent, as specified by MDP(m).n
+
+    % MDP(m).nで指定された結果生成エージェントのサイズをチェック
     %----------------------------------------------------------------------
     if ~isfield(MDP(m),'n')
         MDP(m).n = zeros(Ng(m),T);
@@ -1409,14 +1397,14 @@ for m = 1:size(MDP,1)
     if size(MDP(m).n,1) < T
         MDP(m).n = repmat(MDP(m).n(:,1),1,T);
     end
-    
-    % mode of generating model (most frequent over outcome modalities)
+
+    % 生成モデルのモード（出力モダリティ全体で最頻値）
     %----------------------------------------------------------------------
     n(m,:) = mode(MDP(m).n.*(MDP(m).n > 0),1);
-    
+
 end
 
-% reorder list of model indices for each update
+% 各更新のモデルインデックスのリストを並べ替え
 %--------------------------------------------------------------------------
 n     = mode(n,1);
 for t = 1:T
@@ -1431,13 +1419,13 @@ end
 return
 
 function MDP = spm_MDP_update(MDP,OUT)
-% FORMAT MDP = spm_MDP_update(MDP,OUT)
-% moves Dirichlet parameters from OUT to MDP
-% MDP - structure array (new)
-% OUT - structure array (old)
+% 書式 MDP = spm_MDP_update(MDP,OUT)
+% ディリクレパラメーターをOUTからMDPに移動する
+% MDP - 構造体配列（新規）
+% OUT - 構造体配列（旧）
 %__________________________________________________________________________
 
-% check for concentration parameters at this level
+% このレベルの集中度パラメーターをチェック
 %--------------------------------------------------------------------------
 try,  MDP.a = OUT.a; end
 try,  MDP.b = OUT.b; end
@@ -1445,7 +1433,7 @@ try,  MDP.c = OUT.c; end
 try,  MDP.d = OUT.d; end
 try,  MDP.e = OUT.e; end
 
-% check for concentration parameters at nested levels
+% ネストされたレベルの集中度パラメーターをチェック
 %--------------------------------------------------------------------------
 try,  MDP.MDP(1).a = OUT.mdp(end).a; end
 try,  MDP.MDP(1).b = OUT.mdp(end).b; end
@@ -1457,65 +1445,65 @@ return
 
 
 function L = spm_MDP_VB_VOX(MDP,L,t)
-% FORMAT L = spm_MDP_VB_VOX(MDP,L,t)
-% returns likelihoods from voice recognition (and articulates responses)
-% MDP - structure array
-% L   - predictive prior over outcomes
-% t   - current trial
+% 書式 L = spm_MDP_VB_VOX(MDP,L,t)
+% 音声認識から尤度を返し（そして応答を発話する）
+% MDP - 構造体配列
+% L   - 結果の予測事前分布
+% t   - 現在の試行
 %
-% L   - likelihood of lexical and prosody outcomes
+% L   - 字句およびプロソディの結果の尤度
 %
-% this subroutine determines who is currently generating auditory output
-% and produces synthetic speech - or uses the current audio recorder object
-% to evaluate the likelihood of the next word
+% このサブルーチンは、現在誰が音声出力を生成しているかを判断し、
+% 合成音声を生成するか、現在のオーディオレコーダーオブジェクトを使用して
+% 次の単語の尤度を評価します。
 %__________________________________________________________________________
 
 
-% check for VOX structure
+% VOX構造体をチェック
 %--------------------------------------------------------------------------
 global VOX
 global TRAIN
 if ~isstruct(VOX), load VOX; VOX.RAND = 0; end
-if isempty(TRAIN), TRAIN = 0;              end
-if t == 1,         pause(1);               end
+if isempty(TRAIN), TRAIN = 0;             end
+if t == 1,         pause(1);              end
 
 
 if ~isfield(VOX,'msg')
-    
-    % prepare useful fields in (global) VOX structure
+
+    % （グローバル）VOX構造体の有用なフィールドを準備
     %----------------------------------------------------------------------
     Data    = imread('recording','png');
     VOX.msg = msgbox('Recording','','custom',Data);
     set(VOX.msg,'Visible','off'), drawnow
-    
-    % indices of words in lexicon and inferred prosody states
+
+    % 辞書内の単語のインデックスと推論されたプロソディ状態
     %----------------------------------------------------------------------
     VOX.io  = spm_voice_i(MDP.label.outcome{1});
     VOX.ip  = find(ismember({VOX.PRO.str},{'amp','dur','Tf','p0','p1','p2'}));
-    
-    % check for audio recorder
+
+    % オーディオレコーダーをチェック
     %----------------------------------------------------------------------
     if ~isfield(VOX,'audio')
         VOX.audio  = audiorecorder(22050,16,1);
     end
-    
+
 end
 
 if MDP.VOX == 0 || MDP.VOX == 1
-    
-    % Agent: computer
+
+    % エージェント: コンピュータ
     %----------------------------------------------------------------------
     str = MDP.label.outcome{1}(MDP.o(1,1:t));
     fprintf('%i: %s\n',MDP.VOX, str{t});
     i   = ismember(str,' ');
     str = str(~i);
     eof = sum(i);
-    
-    % if this is the end of a sentence
+
+    % 文の終わりである場合
     %----------------------------------------------------------------------
     if eof == 1 || (~eof && t == MDP.T)
-        
-        % get lexical and prosody
+
+        % 字句とプロソディを取得
         %------------------------------------------------------------------
         lexical = spm_voice_i(str);
         prosody = VOX.prosody(:,lexical);
@@ -1524,15 +1512,15 @@ if MDP.VOX == 0 || MDP.VOX == 1
         else
             speaker = [3; 3 ];
         end
-        
-        % add prosody and articulate
+
+        % プロソディを追加して発話
         %------------------------------------------------------------------
         prosody(VOX.ip,:) = MDP.o(2:end,1:numel(str));
         prosody(1,:)      = min(8,prosody(1,:) + 2);
         spm_voice_speak(lexical,prosody,speaker);
-        
-        
-        % TRAIN: prompt for prosody
+
+
+        % TRAIN: プロソディのプロンプト
         %------------------------------------------------------------------
         if TRAIN
             VOX.mute  = 0;
@@ -1545,28 +1533,28 @@ if MDP.VOX == 0 || MDP.VOX == 1
                 [SEG,W,prosody] = spm_voice_read(VOX.audio,P);
             end
             clc, disp('Thank you')
-            
-            % prompt for prosody
+
+            % プロソディのプロンプト
             %--------------------------------------------------------------
             for i = 1:numel(VOX.ip)
                 for j = 1:size(P,2)
                     L{i + 1,j} = sparse(prosody(VOX.ip(i),j),1,1,8,1);
                 end
             end
-            
-            % uniform priors for spce  (' ')
+
+            % 空白（' '）の一様事前分布
             %--------------------------------------------------------------
             L{i + 1,t} = ones(8,1)/8;
-            
+
         end
-        
-        
+
+
     end
 
-    
+
 elseif MDP.VOX == 2
-    
-    % user
+
+    % ユーザー
     %----------------------------------------------------------------------
     if t == 1
         VOX.IT = 1;
@@ -1575,21 +1563,21 @@ elseif MDP.VOX == 2
         set(VOX.msg,'Visible','on')
         pause(1);
         set(VOX.msg,'Visible','off')
-        
-        % toggle to see spectral envelope
+
+        % スペクトルエンベロープを見るためのトグル
         %----------------------------------------------------------------------
         VOX.onsets = 0;
-        
+
     end
-    
-    % get prior over outcomes and synchronise with Lexicon
+
+    % 結果の事前分布を取得し、辞書と同期
     %----------------------------------------------------------------------
-    io  = VOX.io;                            % indices words in lexicon
-    ip  = VOX.ip;                            % indices of prosody
-    no  = numel(io);                         % number of outcomes
-    nw  = numel(VOX.LEX);                    % number of words in lexicon
-    nk  = size(L,2) - t + 1;                 % number of predictions
-    P   = zeros(nw,nk);                      % prior over lexicon
+    io  = VOX.io;                           % 辞書内の単語のインデックス
+    ip  = VOX.ip;                           % プロソディのインデックス
+    no  = numel(io);                        % 結果の数
+    nw  = numel(VOX.LEX);                   % 辞書内の単語数
+    nk  = size(L,2) - t + 1;                % 予測の数
+    P   = zeros(nw,nk);                     % 辞書の事前分布
     for k = 1:nk
         for i = 1:no
             j = io(i);
@@ -1598,63 +1586,63 @@ elseif MDP.VOX == 2
             end
         end
     end
-      
-    % deep segmentation: check for last word (P(:,2) = 0)
+
+    % 深いセグメンテーション: 最後の単語をチェック (P(:,2) = 0)
     %----------------------------------------------------------------------
     VOX.LL = -128;
     VOX.LW = 0;
     if size(P,2) > 1
         if any(P(:,2))
             if any(P(:,2) < (1 - 1/8))
-                VOX.LL = 4;                  % there may be no next word
+                VOX.LL = 4;                 % 次の単語がないかもしれない
                 VOX.LW = 0;
             else
-                VOX.LL = -128;               % there is a subsequent word
-                VOX.LW = 0;                  % and this is not the last
+                VOX.LL = -128;              % 後続の単語がある
+                VOX.LW = 0;                 % そしてこれは最後ではない
             end
         else
             P      = P(:,1);
-            VOX.LW = 1;                      % this is the last word
+            VOX.LW = 1;                     % これは最後の単語
         end
     end
-    
-    % or direct segmentation (comment out to suppress)
+
+    % または直接セグメンテーション（抑制するにはコメントアウト）
     %----------------------------------------------------------------------
     P  = P(:,1);
-    
-    % get likelihood of discernible words
+
+    % 識別可能な単語の尤度を取得
     %----------------------------------------------------------------------
     P      = P > 1/128;
     if any(P(:,1))
-        
-        % log likelihoods
+
+        % 対数尤度
         %------------------------------------------------------------------
         O  = spm_voice_get_word(VOX.audio,bsxfun(@rdivide,P,sum(P)));
-        
-        % check for end of sentence 
+
+        % 文の終わりをチェック
         %------------------------------------------------------------------
         try
-            A = spm_softmax(O{2}(:,1));    % P(lowest amplitude)
+            A = spm_softmax(O{2}(:,1));   % P(最低振幅)
         catch
             A = 1;
         end
         if isempty(O) || A(1) > 1/2
-            
-            % end of sentence or indiscernible word
+
+            % 文の終わりまたは識別不能な単語
             %--------------------------------------------------------------
             L{1,t}( ~io) = 1;
             L{1,t}(~~io) = 0;
             L{1,t}       = L{1,t}/sum(L{1,t});
-            
-            % prosody likelihoods
+
+            % プロソディ尤度
             %--------------------------------------------------------------
             for g = 2:numel(L)
                 L{g,t} = spm_softmax(spm_zeros(L{g,t}));
             end
-            
+
         else
-            
-            % lexical likelihoods
+
+            % 字句尤度
             %--------------------------------------------------------------
             LL    = zeros(no,1);
             for i = 1:no
@@ -1664,8 +1652,8 @@ elseif MDP.VOX == 2
                 end
             end
             L{1,t}  = spm_softmax(LL);
-                        
-            % prosody likelihoods
+
+            % プロソディ尤度
             %--------------------------------------------------------------
             for g = 2:numel(L)
                 L{g,t} = spm_softmax(O{2}(:,ip(g - 1)));
@@ -1673,13 +1661,12 @@ elseif MDP.VOX == 2
 
         end
 
-    end % discernible words
-    
-    % display word
+    end % 識別可能な単語
+
+    % 単語を表示
     %----------------------------------------------------------------------
     [d,w]  = max(L{1,t});
     fprintf('%i: %s\n',MDP.VOX, MDP.label.outcome{1}{w});
-        
+
 
 end
-

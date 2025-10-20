@@ -50,7 +50,7 @@ Nt    = length(MDP);               % number of trials
 Ne    = size(MDP(1).V,1) + 1;      % number of epochs per trial
 Np    = size(MDP(1).V,2) + 1;      % number of policies
 for i = 1:Nt
-    
+
     % assemble expectations of hidden states and outcomes
     %----------------------------------------------------------------------
     for j = 1:Ne
@@ -69,8 +69,8 @@ for i = 1:Nt
     act_prob(:,i) = MDP(i).P(:,:,1)';
     act(:,i) = MDP(i).u(2,1);
     w(:,i) = mean(MDP(i).dn,2);
-    
-    
+
+
     % assemble context learning
     %----------------------------------------------------------------------
     for f = 1:Nf
@@ -89,7 +89,7 @@ for i = 1:Nt
         end
         d{f}(:,i) = D/sum(D);
     end
-    
+
     % assemble performance
     %----------------------------------------------------------------------
     p(i)  = 0;
@@ -104,7 +104,7 @@ for i = 1:Nt
         end
     end
     q(i)   = sum(MDP(i).rt(2:end));
-    
+
 end
 
 % assemble output structure if required
@@ -186,7 +186,7 @@ for f = 1:Nf
         plot(spm_cat(x{f}))
     end
 end
-title('State estimation (ERPs)'), ylabel('Response'), 
+title('State estimation (ERPs)'), ylabel('Response'),
 spm_axis tight, hold off, box off
 
 % Precision (dopamine)
@@ -194,8 +194,8 @@ spm_axis tight, hold off, box off
 subplot(5,1,4)
 w   = spm_vec(w);
 if Nt > 8
-    fill([1 1:length(w) length(w)],[0; w.*(w > 0); 0],'k'), hold on
-    fill([1 1:length(w) length(w)],[0; w.*(w < 0); 0],'k'), hold off
+    fill([1 1:length(w) length(w)]',[0; w.*(w > 0); 0],'k'), hold on
+    fill([1 1:length(w) length(w)]',[0; w.*(w < 0); 0],'k'), hold off
 else
     bar(w,1.1,'k')
 end
@@ -222,7 +222,7 @@ for f = 1
 %     try
 %         set(gca,'YTickLabel',MDP(1).Bname{f});
 %     end
-    
+
     yticklabels({'Left-Win','Right-Win'})
-    
+
 end
